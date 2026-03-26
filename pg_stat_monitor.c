@@ -45,6 +45,7 @@
 #include <utils/builtins.h>
 #include <utils/lsyscache.h>
 #include <utils/memutils.h>
+#include <utils/tuplestore.h>
 
 #if PG_VERSION_NUM >= 180000
 #include <commands/explain_state.h>
@@ -171,7 +172,11 @@ static int	pg_get_application_name(char *name, int buff_size);
 static PgBackendStatus *pg_get_backend_status(void);
 static Datum intarray_get_datum(int32 arr[], int len);
 
+#if PG_VERSION_NUM >= 190000
+DECLARE_HOOK(void pgsm_post_parse_analyze, ParseState *pstate, Query *query, const JumbleState *jstate);
+#else
 DECLARE_HOOK(void pgsm_post_parse_analyze, ParseState *pstate, Query *query, JumbleState *jstate);
+#endif
 DECLARE_HOOK(void pgsm_ExecutorStart, QueryDesc *queryDesc, int eflags);
 #if PG_VERSION_NUM < 180000
 DECLARE_HOOK(void pgsm_ExecutorRun, QueryDesc *queryDesc, ScanDirection direction, uint64 count, bool execute_once);
@@ -186,7 +191,11 @@ DECLARE_HOOK(bool pgsm_ExecutorCheckPerms, List *rt, bool abort);
 DECLARE_HOOK(bool pgsm_ExecutorCheckPerms, List *rt, List *rp, bool abort);
 #endif
 
+#if PG_VERSION_NUM >= 190000
+DECLARE_HOOK(PlannedStmt *pgsm_planner_hook, Query *parse, const char *query_string, int cursorOptions, ParamListInfo boundParams, ExplainState *es);
+#else
 DECLARE_HOOK(PlannedStmt *pgsm_planner_hook, Query *parse, const char *query_string, int cursorOptions, ParamListInfo boundParams);
+#endif
 DECLARE_HOOK(void pgsm_ProcessUtility, PlannedStmt *pstmt, const char *queryString,
 			 bool readOnlyTree,
 			 ProcessUtilityContext context,
@@ -237,9 +246,9 @@ static void pg_stat_monitor_internal(FunctionCallInfo fcinfo,
 									 pgsmVersion api_version,
 									 bool showtext);
 
-static char *generate_normalized_query(JumbleState *jstate, const char *query,
+static char *generate_normalized_query(const JumbleState *jstate, const char *query,
 									   int query_loc, int *query_len_p, int encoding);
-static void fill_in_constant_lengths(JumbleState *jstate, const char *query, int query_loc);
+static void fill_in_constant_lengths(const JumbleState *jstate, const char *query, int query_loc);
 static int	comp_location(const void *a, const void *b);
 
 static uint64 get_next_wbucket(pgsmSharedState *pgsm);
@@ -376,7 +385,11 @@ pgsm_shmem_request(void)
 #endif
 
 static void
+#if PG_VERSION_NUM >= 190000
+pgsm_post_parse_analyze_internal(ParseState *pstate, Query *query, const JumbleState *jstate)
+#else
 pgsm_post_parse_analyze_internal(ParseState *pstate, Query *query, JumbleState *jstate)
+#endif
 {
 	pgsmEntry  *entry;
 	const char *query_text;
@@ -495,7 +508,11 @@ pgsm_post_parse_analyze_internal(ParseState *pstate, Query *query, JumbleState *
  * Post-parse-analysis hook: mark query with a queryId
  */
 static void
+#if PG_VERSION_NUM >= 190000
+pgsm_post_parse_analyze(ParseState *pstate, Query *query, const JumbleState *jstate)
+#else
 pgsm_post_parse_analyze(ParseState *pstate, Query *query, JumbleState *jstate)
+#endif
 {
 	if (prev_post_parse_analyze_hook)
 		prev_post_parse_analyze_hook(pstate, query, jstate);
@@ -727,7 +744,11 @@ pgsm_ExecutorEnd(QueryDesc *queryDesc)
 						  &sys_info,	/* SysInfo */
 						  NULL, /* ErrorInfo */
 						  0,	/* plan_total_time */
+#if PG_VERSION_NUM >= 190000
+						  INSTR_TIME_GET_MILLISEC(queryDesc->totaltime->total), /* exec_total_time */
+#else
 						  queryDesc->totaltime->total * 1000.0, /* exec_total_time */
+#endif
 						  queryDesc->estate->es_processed,	/* rows */
 						  &queryDesc->totaltime->bufusage,	/* bufusage */
 						  &queryDesc->totaltime->walusage,	/* walusage */
@@ -822,7 +843,11 @@ pgsm_ExecutorCheckPerms(List *rt, List *rp, bool abort)
 }
 
 static PlannedStmt *
+#if PG_VERSION_NUM >= 190000
+pgsm_planner_hook(Query *parse, const char *query_string, int cursorOptions, ParamListInfo boundParams, ExplainState *es)
+#else
 pgsm_planner_hook(Query *parse, const char *query_string, int cursorOptions, ParamListInfo boundParams)
+#endif
 {
 	PlannedStmt *result;
 	int64		queryId = parse->queryId;
@@ -885,9 +910,17 @@ pgsm_planner_hook(Query *parse, const char *query_string, int cursorOptions, Par
 			 * the second call would trigger an assertion failure.
 			 */
 			if (planner_hook_next)
-				result = planner_hook_next(parse, query_string, cursorOptions, boundParams);
+				result = planner_hook_next(parse, query_string, cursorOptions, boundParams
+#if PG_VERSION_NUM >= 190000
+										   , es
+#endif
+					);
 			else
-				result = standard_planner(parse, query_string, cursorOptions, boundParams);
+				result = standard_planner(parse, query_string, cursorOptions, boundParams
+#if PG_VERSION_NUM >= 190000
+										  , es
+#endif
+					);
 		}
 		PG_FINALLY();
 		{
@@ -952,9 +985,17 @@ pgsm_planner_hook(Query *parse, const char *query_string, int cursorOptions, Par
 		PG_TRY();
 		{
 			if (planner_hook_next)
-				result = planner_hook_next(parse, query_string, cursorOptions, boundParams);
+				result = planner_hook_next(parse, query_string, cursorOptions, boundParams
+#if PG_VERSION_NUM >= 190000
+										   , es
+#endif
+					);
 			else
-				result = standard_planner(parse, query_string, cursorOptions, boundParams);
+				result = standard_planner(parse, query_string, cursorOptions, boundParams
+#if PG_VERSION_NUM >= 190000
+										  , es
+#endif
+					);
 		}
 		PG_FINALLY();
 		{
@@ -2717,7 +2758,7 @@ get_pgsm_query_id_hash(const char *norm_query, int norm_len)
  * Returns a palloc'd string.
  */
 static char *
-generate_normalized_query(JumbleState *jstate, const char *query,
+generate_normalized_query(const JumbleState *jstate, const char *query,
 						  int query_loc, int *query_len_p, int encoding)
 {
 	char	   *norm_query;
@@ -2853,7 +2894,7 @@ generate_normalized_query(JumbleState *jstate, const char *query,
  * reason for a constant to start with a '-'.
  */
 static void
-fill_in_constant_lengths(JumbleState *jstate, const char *query,
+fill_in_constant_lengths(const JumbleState *jstate, const char *query,
 						 int query_loc)
 {
 	LocationLen *locs;
@@ -2879,8 +2920,10 @@ fill_in_constant_lengths(JumbleState *jstate, const char *query,
 							 &ScanKeywords,
 							 ScanKeywordTokens);
 
+#if PG_VERSION_NUM < 190000
 	/* we don't want to re-emit any escape string warnings */
 	yyextra.escape_string_warning = false;
+#endif
 
 	/* Search for each constant, in sequence */
 	for (i = 0; i < jstate->clocations_count; i++)
