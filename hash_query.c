@@ -122,7 +122,11 @@ pgsm_startup(void)
 		pgsm->raw_dsa_area = p;
 		dsa = dsa_create_in_place(pgsm->raw_dsa_area,
 								  pgsm_query_area_size(),
-								  LWLockNewTrancheId(), 0);
+#if PG_VERSION_NUM >= 190000
+							  LWLockNewTrancheId("pg_stat_monitor_dsa"), 0);
+#else
+							  LWLockNewTrancheId(), 0);
+#endif
 		dsa_pin(dsa);
 		dsa_set_size_limit(dsa, pgsm_query_area_size());
 
@@ -180,7 +184,11 @@ pgsm_create_bucket_hash(pgsmSharedState *pgsm, dsa_area *dsa)
 #if USE_DYNAMIC_HASH
 	dshash_table *dsh;
 
+#if PG_VERSION_NUM >= 190000
+	pgsm->hash_tranche_id = LWLockNewTrancheId("pg_stat_monitor_hash");
+#else
 	pgsm->hash_tranche_id = LWLockNewTrancheId();
+#endif
 	dsh_params.tranche_id = pgsm->hash_tranche_id;
 	dsh = dshash_create(dsa, &dsh_params, 0);
 	bucket_hash = dshash_get_hash_table_handle(dsh);
