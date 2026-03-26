@@ -246,10 +246,12 @@ static void pg_stat_monitor_internal(FunctionCallInfo fcinfo,
 									 pgsmVersion api_version,
 									 bool showtext);
 
+#if PG_VERSION_NUM < 190000
 static char *generate_normalized_query(const JumbleState *jstate, const char *query,
 									   int query_loc, int *query_len_p, int encoding);
 static void fill_in_constant_lengths(const JumbleState *jstate, const char *query, int query_loc);
 static int	comp_location(const void *a, const void *b);
+#endif
 
 static uint64 get_next_wbucket(pgsmSharedState *pgsm);
 
@@ -456,11 +458,18 @@ pgsm_post_parse_analyze_internal(ParseState *pstate, Query *query, JumbleState *
 	/* Generate a normalized query */
 	if (jstate && jstate->clocations_count > 0 && (pgsm_enable_pgsm_query_id || pgsm_normalized_query))
 	{
+#if PG_VERSION_NUM >= 190000
+		norm_query = GenerateNormalizedQuery(jstate,
+											query_text,	/* query */
+											location,	/* query location */
+											&norm_query_len);
+#else
 		norm_query = generate_normalized_query(jstate,
 											   query_text,	/* query */
 											   location,	/* query location */
 											   &norm_query_len,
 											   GetDatabaseEncoding());
+#endif
 
 		Assert(norm_query);
 	}
@@ -2738,6 +2747,7 @@ get_pgsm_query_id_hash(const char *norm_query, int norm_len)
 	return pgsm_query_id;
 }
 
+#if PG_VERSION_NUM < 190000
 /*
  * Generate a normalized version of the query string that will be used to
  * represent all similar queries.
@@ -3013,6 +3023,7 @@ comp_location(const void *a, const void *b)
 	else
 		return 0;
 }
+#endif							/* PG_VERSION_NUM < 190000 */
 
 #define MAX_STRING_LEN	1024
 
